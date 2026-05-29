@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskRow } from '@main/db/schema';
 import { err } from '@shared/result';
+import { DEFAULT_TASK_KIND, TASK_KIND } from '@shared/tasks';
+import { toStoredBranch } from '../stored-branch';
 import { createTask } from './createTask';
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   findBranchAnywhere: vi.fn(),
   fetchPrForReview: vi.fn(),
   getConfiguredRemotes: vi.fn(),
+  getRepositoryInfo: vi.fn(),
+  createBranch: vi.fn(),
+  publishBranch: vi.fn(),
 }));
 
 vi.mock('@main/db/client', () => ({
@@ -51,6 +56,7 @@ function makeTaskRow(values: Partial<TaskRow>): TaskRow {
     id: values.id ?? 'task-1',
     projectId: values.projectId ?? 'project-1',
     name: values.name ?? 'Review PR',
+    kind: values.kind ?? DEFAULT_TASK_KIND,
     status: values.status ?? 'in_progress',
     sourceBranch: values.sourceBranch ?? null,
     taskBranch: values.taskBranch ?? null,
@@ -81,6 +87,9 @@ describe('createTask', () => {
     mocks.findBranchAnywhere.mockResolvedValue('/external/worktrees/pr-branch');
     mocks.fetchPrForReview.mockResolvedValue({ success: true });
     mocks.getConfiguredRemotes.mockResolvedValue({ baseRemote: 'origin', pushRemote: 'origin' });
+    mocks.getRepositoryInfo.mockResolvedValue({ isUnborn: false, currentBranch: 'main' });
+    mocks.createBranch.mockResolvedValue({ success: true, data: undefined });
+    mocks.publishBranch.mockResolvedValue({ success: true, data: { output: '' } });
     mocks.getProject.mockReturnValue({
       defaultWorkspaceType: { kind: 'local' },
       worktreeService: {
@@ -88,6 +97,9 @@ describe('createTask', () => {
       },
       repository: {
         getConfiguredRemotes: mocks.getConfiguredRemotes,
+        getRepositoryInfo: mocks.getRepositoryInfo,
+        createBranch: mocks.createBranch,
+        publishBranch: mocks.publishBranch,
         fetchPrForReview: mocks.fetchPrForReview,
       },
     });
@@ -131,7 +143,10 @@ describe('createTask', () => {
     expect(insertTaskValues).toHaveBeenCalledWith(
       expect.objectContaining({
         taskBranch: 'claude/add-french-translations-ud2fs',
-        sourceBranch: { type: 'local', branch: 'claude/add-french-translations-ud2fs' },
+        sourceBranch: toStoredBranch({
+          type: 'local',
+          branch: 'claude/add-french-translations-ud2fs',
+        }),
       })
     );
   });
@@ -178,8 +193,170 @@ describe('createTask', () => {
     expect(insertTaskValues).toHaveBeenCalledWith(
       expect.objectContaining({
         taskBranch: 'claude/add-french-translations-ud2fs',
-        sourceBranch: { type: 'local', branch: 'claude/add-french-translations-ud2fs' },
+        sourceBranch: toStoredBranch({
+          type: 'local',
+          branch: 'claude/add-french-translations-ud2fs',
+        }),
       })
     );
+  });
+
+  it('inserts kind="chat" with no worktree when requested', async () => {
+    const insertTaskValues = vi.fn((values: Partial<TaskRow>) => ({
+      returning: vi.fn().mockResolvedValue([makeTaskRow(values)]),
+    }));
+    const insertWorkspaceValues = vi.fn().mockResolvedValue(undefined);
+    mocks.insert
+      .mockReturnValueOnce({ values: insertTaskValues })
+      .mockReturnValueOnce({ values: insertWorkspaceValues });
+
+    const result = await createTask({
+      id: 'chat-1',
+      projectId: 'project-1',
+      name: 'chat-may-27',
+      kind: TASK_KIND.Chat,
+      sourceBranch: { type: 'local', branch: 'main' },
+      strategy: { kind: 'no-worktree' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.task.kind).toBe(TASK_KIND.Chat);
+    expect(insertTaskValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: TASK_KIND.Chat,
+        taskBranch: undefined,
+      })
+    );
+  });
+
+  it('defaults kind to "task" when not provided', async () => {
+    const insertTaskValues = vi.fn((values: Partial<TaskRow>) => ({
+      returning: vi.fn().mockResolvedValue([makeTaskRow(values)]),
+    }));
+    const insertWorkspaceValues = vi.fn().mockResolvedValue(undefined);
+    mocks.insert
+      .mockReturnValueOnce({ values: insertTaskValues })
+      .mockReturnValueOnce({ values: insertWorkspaceValues });
+
+    await createTask({
+      id: 'task-1',
+      projectId: 'project-1',
+      name: 'Review PR',
+      sourceBranch: { type: 'local', branch: 'main' },
+      strategy: {
+        kind: 'from-pull-request',
+        prNumber: 123,
+        headBranch: 'feature',
+        headRepositoryUrl: 'https://github.com/example/repo.git',
+        isFork: false,
+      },
+    });
+
+    expect(insertTaskValues).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: TASK_KIND.Task })
+    );
+  });
+
+  it('creates a regular no-worktree task with kind task and no branch', async () => {
+    const insertTaskValues = vi.fn((values: Partial<TaskRow>) => ({
+      returning: vi.fn().mockResolvedValue([makeTaskRow(values)]),
+    }));
+    const insertWorkspaceValues = vi.fn().mockResolvedValue(undefined);
+    mocks.insert
+      .mockReturnValueOnce({ values: insertTaskValues })
+      .mockReturnValueOnce({ values: insertWorkspaceValues });
+
+    const result = await createTask({
+      id: 'blank-1',
+      projectId: 'project-1',
+      name: 'Blank task',
+      sourceBranch: { type: 'local', branch: 'main' },
+      strategy: { kind: 'no-worktree' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.task.kind).toBe(TASK_KIND.Task);
+    expect(insertTaskValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: TASK_KIND.Task,
+        taskBranch: undefined,
+      })
+    );
+  });
+
+  it('creates branch-based tasks from local source branches without remote sync', async () => {
+    const insertTaskValues = vi.fn((values: Partial<TaskRow>) => ({
+      returning: vi.fn().mockResolvedValue([makeTaskRow(values)]),
+    }));
+    const insertWorkspaceValues = vi.fn().mockResolvedValue(undefined);
+    mocks.insert
+      .mockReturnValueOnce({ values: insertTaskValues })
+      .mockReturnValueOnce({ values: insertWorkspaceValues });
+
+    const result = await createTask({
+      id: 'task-1',
+      projectId: 'project-1',
+      name: 'Local task',
+      sourceBranch: { type: 'local', branch: 'main' },
+      strategy: {
+        kind: 'new-branch',
+        taskBranch: 'task/local',
+        pushBranch: false,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(mocks.createBranch).toHaveBeenCalledWith('task/local', 'main', false, undefined);
+  });
+
+  it('blocks branch-based tasks when the selected remote source branch cannot be fetched', async () => {
+    mocks.createBranch.mockResolvedValueOnce(
+      err({
+        type: 'fetch_failed',
+        remote: 'origin',
+        branch: 'main',
+        error: {
+          type: 'auth_failed',
+          message:
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        },
+      })
+    );
+
+    const result = await createTask({
+      id: 'task-1',
+      projectId: 'project-1',
+      name: 'Remote task',
+      sourceBranch: {
+        type: 'remote',
+        branch: 'main',
+        remote: { name: 'origin', url: 'https://github.com/example/repo.git' },
+      },
+      strategy: {
+        kind: 'new-branch',
+        taskBranch: 'task/remote',
+        pushBranch: false,
+      },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        type: 'branch-create-failed',
+        branch: 'task/remote',
+        error: {
+          type: 'fetch_failed',
+          remote: 'origin',
+          branch: 'main',
+          error: {
+            type: 'auth_failed',
+            message:
+              "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+          },
+        },
+      },
+    });
+    expect(mocks.createBranch).toHaveBeenCalledWith('task/remote', 'main', true, 'origin');
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 });

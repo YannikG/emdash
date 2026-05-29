@@ -2,7 +2,76 @@ import type { CreateConversationParams } from '@shared/conversations';
 import type { Branch, CreateBranchError, FetchPrForReviewError, PushError } from '@shared/git';
 import type { PullRequest } from '@shared/pull-requests';
 
-export type TaskLifecycleStatus = 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled';
+export type TaskLifecycleStatus =
+  | 'todo'
+  | 'in_progress'
+  | 'review'
+  | 'done'
+  | 'cancelled'
+  | 'backlog'
+  | 'duplicate'
+  | 'triage';
+
+/** Canonical task kind values (string unions, not TS enums). */
+export const TASK_KIND = {
+  Task: 'task',
+  Chat: 'chat',
+} as const;
+
+export type TaskKind = (typeof TASK_KIND)[keyof typeof TASK_KIND];
+
+export const DEFAULT_TASK_KIND = TASK_KIND.Task;
+
+export function resolveTaskKind(kind?: TaskKind): TaskKind {
+  return kind ?? DEFAULT_TASK_KIND;
+}
+
+/** Sidebar / view grouping derived from {@link TaskKind}. */
+export const TASK_SIDEBAR_GROUP = {
+  Tasks: 'tasks',
+  Chats: 'chats',
+} as const;
+
+export type TaskSidebarGroup = (typeof TASK_SIDEBAR_GROUP)[keyof typeof TASK_SIDEBAR_GROUP];
+
+export const TASK_SIDEBAR_GROUP_LABEL: Record<TaskSidebarGroup, string> = {
+  [TASK_SIDEBAR_GROUP.Tasks]: 'Tasks',
+  [TASK_SIDEBAR_GROUP.Chats]: 'Chats',
+};
+
+export function taskSidebarGroupForKind(kind: TaskKind): TaskSidebarGroup {
+  return kind === TASK_KIND.Chat ? TASK_SIDEBAR_GROUP.Chats : TASK_SIDEBAR_GROUP.Tasks;
+}
+
+export const DEFAULT_TASK_SIDEBAR_GROUP = taskSidebarGroupForKind(DEFAULT_TASK_KIND);
+
+export type TaskViewProfile = {
+  group: TaskSidebarGroup;
+  showGitChrome: boolean;
+  showChangesSidebar: boolean;
+  showFilesSidebar: boolean;
+  showFilePicker: boolean;
+};
+
+export function taskViewProfile(kind: TaskKind): TaskViewProfile {
+  const group = taskSidebarGroupForKind(kind);
+  if (group === TASK_SIDEBAR_GROUP.Chats) {
+    return {
+      group,
+      showGitChrome: false,
+      showChangesSidebar: false,
+      showFilesSidebar: false,
+      showFilePicker: false,
+    };
+  }
+  return {
+    group,
+    showGitChrome: true,
+    showChangesSidebar: true,
+    showFilesSidebar: true,
+    showFilePicker: true,
+  };
+}
 
 export type Issue = {
   provider: 'github' | 'linear' | 'jira' | 'gitlab' | 'plain' | 'forgejo' | 'featurebase' | 'asana';
@@ -23,6 +92,7 @@ export type Task = {
   id: string;
   projectId: string;
   name: string;
+  kind: TaskKind;
   status: TaskLifecycleStatus;
   sourceBranch: Branch | undefined;
   taskBranch?: string;
@@ -65,6 +135,7 @@ export type CreateTaskParams = {
   id: string;
   projectId: string;
   name: string;
+  kind?: TaskKind;
   /** The branch to fork the new worktree from (not used for `from-pull-request` strategy) */
   sourceBranch: Branch;
   /** Controls branch creation, worktree setup, and git fetch strategy */
@@ -100,18 +171,18 @@ export type CreateTaskSuccess = {
 export type RenameTaskError =
   | { type: 'task-not-found'; taskId: string }
   | { type: 'project-not-found'; projectId: string }
+  | { type: 'branch-managed-by-linked-issue'; provider: Issue['provider'] }
+  | { type: 'branch-has-open-pr'; branch: string }
+  | { type: 'branch-has-siblings'; branch: string }
   | { type: 'branch-already-exists'; branch: string }
   | { type: 'branch-rename-failed'; branch: string; message: string };
 
-export type RenameTaskWarning = {
-  type: 'branch-remote-push-failed';
-  branch: string;
-  message: string;
-};
-
 export type RenameTaskSuccess = {
   task: Task;
-  warning?: RenameTaskWarning;
+};
+
+export type RenameTaskOptions = {
+  renameBranch?: boolean;
 };
 
 export type ProvisionTaskResult = {
@@ -137,6 +208,12 @@ export type TaskDeletePreflightItem = {
 export type DeletePreflightResult = {
   tasks: TaskDeletePreflightItem[];
 };
+
+export function generateChatName(now = new Date()): string {
+  const month = now.toLocaleString('en', { month: 'short' });
+  const day = now.getDate();
+  return `chat-${month.toLowerCase()}-${day}`;
+}
 
 export function formatIssueAsPrompt(issue: Issue, initialPrompt?: string): string {
   const parts = [

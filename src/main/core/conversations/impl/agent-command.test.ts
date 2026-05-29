@@ -202,15 +202,16 @@ describe('buildAgentCommand', () => {
     });
   });
 
-  it('passes Droid session id when resuming', () => {
+  it('passes Droid resume flag with session id when resuming', () => {
     const result = buildAgentCommand({
       providerId: 'droid',
       providerConfig: providerConfigDefaults.droid,
       sessionId: 'conv-1',
+      providerSessionId: '31477a03-961a-4451-82d4-efded56947fc',
       isResuming: true,
     });
 
-    expect(result.args).toEqual(['--session-id', 'conv-1']);
+    expect(result.args).toEqual(['--resume', '31477a03-961a-4451-82d4-efded56947fc']);
   });
 
   it.each<{
@@ -225,7 +226,7 @@ describe('buildAgentCommand', () => {
       resumeArgs: ['--continue'],
     },
     { providerId: 'grok', freshArgs: [], resumeArgs: ['-r'] },
-    { providerId: 'copilot', freshArgs: ['Fix the bug'], resumeArgs: ['--resume'] },
+    { providerId: 'copilot', freshArgs: ['-i', 'Fix the bug'], resumeArgs: ['--resume'] },
     {
       providerId: 'auggie',
       freshArgs: ['--allow-indexing', 'Fix the bug'],
@@ -275,6 +276,23 @@ describe('buildAgentCommand', () => {
 
     expect(result.args).toContain('--model');
     expect(result.args).toContain('Claude Sonnet');
+  });
+
+  it('respects explicit Copilot positional prompt overrides', () => {
+    const result = buildAgentCommand({
+      providerId: 'copilot',
+      providerConfig: makeConfig({
+        cli: 'copilot',
+        initialPromptFlag: '',
+        resumeFlag: '--resume',
+        autoApproveFlag: '--allow-all-tools',
+        sessionIdFlag: undefined,
+      }),
+      initialPrompt: 'Fix the bug',
+      sessionId: 'conv-1',
+    });
+
+    expect(result).toEqual({ command: 'copilot', args: ['Fix the bug'] });
   });
 
   it('rejects shell control syntax that makes managed args ambiguous', () => {

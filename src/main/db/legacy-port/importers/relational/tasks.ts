@@ -1,5 +1,7 @@
+import { toStoredBranch } from '@main/core/tasks/stored-branch';
 import { tasks } from '@main/db/schema';
 import { log } from '@main/lib/logger';
+import { DEFAULT_TASK_KIND } from '@shared/tasks';
 import { readLegacyRows, toInteger, toIsoTimestamp, toTrimmedString } from './helpers';
 import { insertWithRegeneratedId } from './insert';
 import { createPortSummary, type PortContext, type PortSummary } from './types';
@@ -146,8 +148,9 @@ export async function portTasks({ appDb, legacyDb, remap }: PortContext): Promis
       id: legacyTaskId,
       projectId: mappedProjectId,
       name: toTrimmedString(row.name) ?? branch ?? `Legacy Task ${legacyTaskId.slice(0, 8)}`,
+      kind: DEFAULT_TASK_KIND,
       status: coerceTaskStatus(toTrimmedString(row.status)),
-      sourceBranch,
+      sourceBranch: toStoredBranch(sourceBranch),
       taskBranch: taskBranch ?? null,
       archivedAt: toTrimmedString(row.archived_at) ?? null,
       createdAt,

@@ -243,7 +243,9 @@ export const AGENT_PROVIDERS: AgentProviderDefinition[] = [
     versionArgs: ['--version'],
     cli: 'droid',
     initialPromptFlag: '',
-    sessionIdFlag: '--session-id',
+    resumeFlag: '--resume',
+    /** Value is unused; presence signals that the session ID is passed as an argument to resumeFlag. */
+    sessionIdFlag: '--resume',
     sessionIdOnResumeOnly: true,
     icon: 'droid.svg',
     alt: 'Factory Droid',
@@ -315,6 +317,7 @@ export const AGENT_PROVIDERS: AgentProviderDefinition[] = [
     versionArgs: ['--version'],
     cli: 'copilot',
     autoApproveFlag: '--allow-all-tools',
+    initialPromptFlag: '-i',
     resumeFlag: '--resume',
     icon: 'gh-copilot.svg',
     alt: 'GitHub Copilot CLI',

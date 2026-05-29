@@ -8,15 +8,20 @@ import { viewStateCache } from '@renderer/lib/stores/view-state-cache';
 import { log } from '@renderer/utils/logger';
 import { prSyncProgressChannel, prUpdatedChannel } from '@shared/events/prEvents';
 import { taskProvisionProgressChannel, taskStatusUpdatedChannel } from '@shared/events/taskEvents';
-import type {
-  CreateTaskError,
-  CreateTaskParams,
-  CreateTaskWarning,
-  DeleteTaskOptions,
-  Task,
-  TaskLifecycleStatus,
+import type { Branch, FetchError } from '@shared/git';
+import {
+  generateChatName,
+  resolveTaskKind,
+  TASK_KIND,
+  type CreateTaskError,
+  type CreateTaskParams,
+  type CreateTaskWarning,
+  type DeleteTaskOptions,
+  type Task,
+  type TaskLifecycleStatus,
 } from '@shared/tasks';
 import type { TaskViewSnapshot } from '@shared/view-state';
+import { formatPushErrorDetail } from '../utils';
 import { conversationRegistry } from './conversation-registry';
 import {
   createUnprovisionedTask,
@@ -30,6 +35,21 @@ import {
 import { terminalRegistry } from './terminal-registry';
 import { workspaceRegistry } from './workspace-registry';
 
+function formatFetchErrorDetail(error: FetchError): string {
+  switch (error.type) {
+    case 'no_remote':
+      return 'No remote is configured for this repository.';
+    case 'auth_failed':
+      return 'Authentication failed. Authenticate Git on this machine, then try again.';
+    case 'network_error':
+      return 'Cannot reach the remote. Check your network connection, then try again.';
+    case 'remote_not_found':
+      return 'The remote repository was not found, or your local Git credentials do not have access.';
+    case 'error':
+      return 'An unexpected error occurred while fetching from the remote.';
+  }
+}
+
 function formatCreateTaskError(error: CreateTaskError): string {
   switch (error.type) {
     case 'project-not-found':
@@ -40,6 +60,8 @@ function formatCreateTaskError(error: CreateTaskError): string {
       switch (error.error.type) {
         case 'already_exists':
           return `Branch "${error.error.name}" already exists. Try a different task name.`;
+        case 'fetch_failed':
+          return `Could not update "${error.error.remote}/${error.error.branch}" before creating the task: ${formatFetchErrorDetail(error.error.error)}`;
         case 'invalid_base':
           return `Source branch "${error.error.from}" is not a valid base. Check that it exists locally or on the selected remote.`;
         case 'invalid_name':
@@ -64,10 +86,7 @@ function formatCreateTaskError(error: CreateTaskError): string {
 function formatCreateTaskWarning(warning: CreateTaskWarning): string {
   switch (warning.type) {
     case 'branch-publish-failed': {
-      const detail =
-        'message' in warning.error
-          ? (warning.error.message ?? warning.error.type)
-          : warning.error.type;
+      const detail = formatPushErrorDetail(warning.error);
       return `Failed to publish branch "${warning.branch}" to "${warning.remote}": ${detail}`;
     }
   }
@@ -206,6 +225,28 @@ export class TaskManagerStore {
     return this._loadPromise;
   }
 
+  private resolveChatSourceBranch(): Branch {
+    const defaultBranch = this._repository.defaultBranch;
+    if (defaultBranch) return defaultBranch;
+    const current = this._repository.currentBranch;
+    if (current) return { type: 'local', branch: current };
+    return { type: 'local', branch: 'main' };
+  }
+
+  createChat(): string {
+    const id = crypto.randomUUID();
+    const name = generateChatName();
+    void this.createTask({
+      id,
+      projectId: this.projectId,
+      name,
+      kind: TASK_KIND.Chat,
+      sourceBranch: this.resolveChatSourceBranch(),
+      strategy: { kind: 'no-worktree' },
+    });
+    return id;
+  }
+
   async createTask(params: CreateTaskParams) {
     runInAction(() => {
       this.tasks.set(
@@ -215,6 +256,7 @@ export class TaskManagerStore {
           lastInteractedAt: new Date().toISOString(),
           createdAt: new Date().toISOString(),
           name: params.name,
+          kind: resolveTaskKind(params.kind),
           status: params.initialStatus ?? 'in_progress',
           statusChangedAt: new Date().toISOString(),
           isPinned: false,

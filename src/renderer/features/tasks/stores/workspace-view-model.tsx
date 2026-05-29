@@ -12,7 +12,8 @@ import type { ILifecycle } from '@renderer/lib/stores/lifecycle';
 import { snapshotRegistry } from '@renderer/lib/stores/snapshot-registry';
 import { focusTracker } from '@renderer/utils/focus-tracker';
 import { log } from '@renderer/utils/logger';
-import type { Task } from '@shared/tasks';
+import { taskViewProfile, type Task, type TaskKind } from '@shared/tasks';
+import type { TerminalShellId } from '@shared/terminal-settings';
 import type {
   DiffViewSnapshot,
   TaskViewSnapshot,
@@ -21,7 +22,7 @@ import type {
 import { ConversationHydrationReconciler } from './conversation-hydration-reconciler';
 import { conversationRegistry } from './conversation-registry';
 import { PrStore } from './pr-store';
-import type { TaskStore } from './task-store';
+import { isRegistered, isUnregistered, taskKindForStore, type TaskStore } from './task-store';
 import { terminalRegistry } from './terminal-registry';
 import { workspaceRegistry } from './workspace-registry';
 
@@ -217,7 +218,7 @@ export class WorkspaceViewModel implements ILifecycle {
    * initialize() so the reaction baseline is correct.
    */
   restoreSnapshot(savedSnapshot: TaskViewSnapshot): void {
-    this.sidebarTab = (savedSnapshot.sidebarTab as SidebarTab) ?? 'conversations';
+    this.setSidebarTab((savedSnapshot.sidebarTab as SidebarTab) ?? 'conversations');
     this.isSidebarCollapsed = savedSnapshot.isSidebarCollapsed ?? true;
     this.focusedRegion = savedSnapshot.focusedRegion === 'bottom' ? 'bottom' : 'main';
     this.isTerminalDrawerOpen = savedSnapshot.isTerminalDrawerOpen ?? false;
@@ -326,7 +327,7 @@ export class WorkspaceViewModel implements ILifecycle {
         );
       },
       (shouldCreate) => {
-        if (shouldCreate) void this._createDefaultTerminal();
+        if (shouldCreate) void this._createDefaultTerminal('auto');
       }
     );
     this._sessionDisposers.push(terminalsDisposer);
@@ -390,7 +391,18 @@ export class WorkspaceViewModel implements ILifecycle {
   }
 
   setSidebarTab(v: SidebarTab): void {
+    const kind = this.taskKind();
+    if (kind) {
+      const profile = taskViewProfile(kind);
+      if (v === 'changes' && !profile.showChangesSidebar) return;
+      if (v === 'files' && !profile.showFilesSidebar) return;
+    }
     this.sidebarTab = v;
+  }
+
+  private taskKind(): TaskKind | null {
+    if (!isRegistered(this._taskStore) && !isUnregistered(this._taskStore)) return null;
+    return taskKindForStore(this._taskStore);
   }
 
   setSidebarCollapsed(collapsed: boolean): void {
@@ -414,11 +426,11 @@ export class WorkspaceViewModel implements ILifecycle {
   }
 
   /** Opens the terminal drawer and always creates a new terminal session. */
-  async openNewTerminal(): Promise<string | undefined> {
+  async openNewTerminal(shell: TerminalShellId = 'auto'): Promise<string | undefined> {
     this.isTerminalDrawerOpen = true;
     this.setFocusedRegion('bottom');
 
-    const terminalId = await this._createDefaultTerminal();
+    const terminalId = await this._createDefaultTerminal(shell);
     if (!terminalId) return undefined;
     runInAction(() => {
       this.terminalTabs.setActiveTab(terminalId);
@@ -427,12 +439,12 @@ export class WorkspaceViewModel implements ILifecycle {
     return terminalId;
   }
 
-  private async _createDefaultTerminal(): Promise<string | undefined> {
+  private async _createDefaultTerminal(shell: TerminalShellId): Promise<string | undefined> {
     if (this._isCreatingTerminal) return undefined;
 
     this._isCreatingTerminal = true;
     try {
-      const terminal = await terminalRegistry.get(this.taskId)?.createDefaultTerminal();
+      const terminal = await terminalRegistry.get(this.taskId)?.createDefaultTerminal(shell);
       if (!terminal) return undefined;
       return terminal.id;
     } catch (error) {

@@ -7,10 +7,14 @@ import { err, type Result } from '@shared/result';
 import type {
   Issue,
   RenameTaskError,
+  RenameTaskOptions,
   RenameTaskSuccess,
   Task,
+  TaskKind,
   TaskLifecycleStatus,
+  TaskViewProfile,
 } from '@shared/tasks';
+import { taskViewProfile } from '@shared/tasks';
 import { conversationRegistry } from './conversation-registry';
 import { workspaceRegistry } from './workspace-registry';
 import { WorkspaceViewModel } from './workspace-view-model';
@@ -27,6 +31,7 @@ export type UnprovisionedTaskPhase =
 export type UnregisteredTaskData = {
   id: string;
   name: string;
+  kind: TaskKind;
   status: TaskLifecycleStatus;
   lastInteractedAt: string;
   createdAt: string;
@@ -181,16 +186,23 @@ export class TaskStore {
     return (this.data as Task).conversations;
   }
 
-  async rename(name: string): Promise<Result<RenameTaskSuccess, RenameTaskError>> {
+  async rename(
+    name: string,
+    options?: RenameTaskOptions
+  ): Promise<Result<RenameTaskSuccess, RenameTaskError>> {
     const task = registeredTaskData(this);
     if (!task) return err({ type: 'task-not-found', taskId: this.data.id });
     try {
-      const result = await rpc.tasks.renameTask(task.projectId, task.id, name);
+      const result = await rpc.tasks.renameTask(task.projectId, task.id, name, options);
       if (!result.success) {
         return result;
       }
       runInAction(() => {
-        this.data.name = name;
+        const current = registeredTaskData(this);
+        if (current) {
+          current.name = name;
+          current.taskBranch = result.data.task.taskBranch;
+        }
       });
       return result;
     } catch (e) {
@@ -299,6 +311,15 @@ export function registeredTaskData(store: TaskStore): Task | undefined {
 
 export function unregisteredTaskData(store: TaskStore): UnregisteredTaskData | undefined {
   return isUnregistered(store) ? store.data : undefined;
+}
+
+export function taskKindForStore(store: TaskStore): TaskKind {
+  if (isRegistered(store)) return store.data.kind;
+  return unregisteredTaskData(store)!.kind;
+}
+
+export function taskViewProfileForStore(store: TaskStore): TaskViewProfile {
+  return taskViewProfile(taskKindForStore(store));
 }
 
 export function createUnregisteredTask(data: UnregisteredTaskData): TaskStore {
